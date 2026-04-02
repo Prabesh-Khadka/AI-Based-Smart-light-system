@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Traffic Management System | Dual View (Single + Network)</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .dashboard {
+            max-width: 1600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px 30px;
+            color: white;
+        }
+        
+        .header h1 {
+            font-size: 2rem;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .mode-toggle {
+            display: flex;
+            gap: 10px;
+            margin: 15px 0;
+        }
+        
+        .mode-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .mode-btn.active {
+            background: white;
+            color: #667eea;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        
+        .mode-btn:not(.active) {
+            background: rgba(255,255,255,0.2);
+            color: white;
+        }
+        
+        .main-layout {
+            padding: 20px;
+        }
+        
+        /* Single Intersection View */
+        .single-view {
+            display: none;
+        }
+        
+        .single-view.active {
+            display: block;
+        }
+        
+        .intersection-container {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 30px;
+        }
+        
+        .intersection {
+            position: relative;
+            width: 550px;
+            height: 550px;
+            background: linear-gradient(135deg, #2c3e50 0%, #1a252f 100%);
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+        }
+        
+        .road {
+            position: absolute;
+            background: linear-gradient(90deg, #34495e 0%, #2c3e50 100%);
+        }
+        
+        .road.horizontal {
+            width: 100%;
+            height: 140px;
+            top: 205px;
+            border-top: 3px solid #ffd966;
+            border-bottom: 3px solid #ffd966;
+        }
+        
+        .road.vertical {
+            width: 140px;
+            height: 100%;
+            left: 205px;
+            border-left: 3px solid #ffd966;
+            border-right: 3px solid #ffd966;
+        }
+        
+        .lane {
+            position: absolute;
+            text-align: center;
+            background: rgba(255,255,255,0.95);
+            padding: 15px;
+            border-radius: 12px;
+            min-width: 120px;
+            font-weight: 600;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        
+        .lane.n { top: 15px; left: 215px; }
+        .lane.e { right: 15px; top: 215px; }
+        .lane.s { bottom: 15px; left: 215px; }
+        .lane.w { left: 15px; top: 215px; }
+        
+        .light {
+            display: inline-block;
+            width: 35px;
+            height: 35px;
+            border-radius: 50%;
+            margin: 8px;
+            transition: all 0.3s ease;
+        }
+        
+        .light.green {
+            background: #27ae60;
+            box-shadow: 0 0 20px #27ae60;
+            animation: pulse 1s ease-in-out infinite;
+        }
+        
+        .light.red { background: #e74c3c; }
+        
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 20px #27ae60; }
+            50% { box-shadow: 0 0 30px #27ae60; }
+        }
+        
+        .vehicle-count {
+            font-size: 22px;
+            font-weight: 800;
+            margin-top: 10px;
+        }
+        
+        /* Network View */
+        .network-view {
+            display: none;
+        }
+        
+        .network-view.active {
+            display: grid;
+            grid-template-columns: 1fr 400px;
+            gap: 20px;
+        }
+        
+        #map {
+            height: 600px;
+            width: 100%;
+            border-radius: 15px;
+        }
+        
+        /* Common Components */
+        .sidebar {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 20px;
+            overflow-y: auto;
+            max-height: 600px;
+        }
+        
+        .control-group {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+        
+        .btn {
+            padding: 8px 15px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+        .btn-success { background: #48bb78; color: white; }
+        .btn-danger { background: #f56565; color: white; }
+        .btn-warning { background: #ed8936; color: white; }
+        .btn-outline { background: transparent; border: 2px solid #667eea; color: #667eea; }
+        
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        
+        .metric-card {
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+            border-left: 4px solid #667eea;
+        }
+        
+        .congestion-bar {
+            height: 8px;
+            background: #e2e8f0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 5px;
+        }
+        
+        .congestion-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #48bb78, #f56565);
+            transition: width 0.3s ease;
+        }
+        
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            border-radius: 10px;
+            color: white;
+            font-weight: 500;
+            z-index: 1000;
+            animation: slideIn 0.3s ease-out;
+        }
+        
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        
+        .notification.success { background: #48bb78; }
+        .notification.error { background: #f56565; }
+        .notification.info { background: #4299e1; }
+        
+        @media (max-width: 1024px) {
+            .network-view.active { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <div class="header">
+            <h1>
+                <span>🚦</span>
+                Smart Traffic Management System
+                <span>🤖</span>
+            </h1>
+            <div class="mode-toggle">
+                <button class="mode-btn active" onclick="switchMode('single')">🚥 Single Intersection View</button>
+                <button class="mode-btn" onclick="switchMode('network')">🗺️ Network Map View</button>
+            </div>
+        </div>
+        
+        <div class="main-layout">
+            <!-- Single Intersection View -->
+            <div id="singleView" class="single-view active">
+                <div class="intersection-container">
+                    <div class="intersection">
+                        <div class="road horizontal"></div>
+                        <div class="road vertical"></div>
+                        
+                        <div class="lane n">
+                            <strong>⬆️ NORTH</strong>
+                            <div><div id="single_n_light" class="light red"></div></div>
+                            <div class="vehicle-count">🚗 <span id="single_n_vehicles">0</span></div>
+                        </div>
+                        <div class="lane e">
+                            <strong>➡️ EAST</strong>
+                            <div><div id="single_e_light" class="light red"></div></div>
+                            <div class="vehicle-count">🚗 <span id="single_e_vehicles">0</span></div>
+                        </div>
+                        <div class="lane s">
+                            <strong>⬇️ SOUTH</strong>
+                            <div><div id="single_s_light" class="light red"></div></div>
+                            <div class="vehicle-count">🚗 <span id="single_s_vehicles">0</span></div>
+                        </div>
+                        <div class="lane w">
+                            <strong>⬅️ WEST</strong>
+                            <div><div id="single_w_light" class="light red"></div></div>
+                            <div class="vehicle-count">🚗 <span id="single_w_vehicles">0</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Network Map View -->
+            <div id="networkView" class="network-view">
+                <div class="map-container">
+                    <div id="map"></div>
+                </div>
+                <div class="sidebar">
+                    <h3>📊 Network Status</h3>
+                    <div class="metrics-grid">
+                        <div class="metric-card"><h5>Total Vehicles</h5><div class="value" id="net_total_vehicles">0</div></div>
+                        <div class="metric-card"><h5>Vehicles Passed</h5><div class="value" id="net_total_passed">0</div></div>
+                        <div class="metric-card"><h5>Avg Congestion</h5><div class="value" id="net_avg_congestion">0%</div></div>
+                        <div class="metric-card"><h5>Active Intersections</h5><div class="value" id="net_active">5</div></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Common Controls (shown in both views) -->
+            <div style="margin-top: 20px;">
+                <div class="control-group">
+                    <h4>🚗 Traffic Density Control</h4>
+                    <div style="display: grid; grid-template-columns: repeat(2,1fr); gap: 10px;">
+                        <div><label>North:</label> <input type="range" id="n_density" min="0" max="10" value="3"> <span id="n_val">3</span></div>
+                        <div><label>East:</label> <input type="range" id="e_density" min="0" max="10" value="3"> <span id="e_val">3</span></div>
+                        <div><label>South:</label> <input type="range" id="s_density" min="0" max="10" value="3"> <span id="s_val">3</span></div>
+                        <div><label>West:</label> <input type="range" id="w_density" min="0" max="10" value="3"> <span id="w_val">3</span></div>
+                    </div>
+                </div>
+                
+                <div class="control-group">
+                    <h4>🎮 Simulation Controls</h4>
+                    <div class="btn-group">
+                        <button onclick="step()" class="btn btn-primary">⏯️ Step (1 sec)</button>
+                        <button onclick="startAuto()" class="btn btn-success">▶️ Auto Run</button>
+                        <button onclick="stopAuto()" class="btn btn-danger">⏸️ Stop</button>
+                        <button onclick="reset()" class="btn btn-outline">🔄 Reset</button>
+                        <button onclick="exportData()" class="btn btn-primary">📥 Export CSV</button>
+                    </div>
+                    <div style="margin-top: 10px;">
+                        <label>Control Mode:</label>
+                        <select id="mode" style="margin-left: 10px; padding: 5px;">
+                            <option value="adaptive">🤖 Adaptive (AI)</option>
+                            <option value="fixed">⏱️ Fixed Time</option>
+                        </select>
+                        <button onclick="runComparison()" class="btn btn-warning" style="margin-left: 10px;">📊 Compare Modes</button>
+                    </div>
+                </div>
+                
+                <div class="control-group">
+                    <h4>🚨 Emergency Vehicle</h4>
+                    <div id="emergency_single">
+                        <select id="emergency_lane_single" style="width: 100%; padding: 8px; margin-bottom: 10px;">
+                            <option value="">Select Direction</option>
+                            <option value="N">North Bound</option>
+                            <option value="E">East Bound</option>
+                            <option value="S">South Bound</option>
+                            <option value="W">West Bound</option>
+                        </select>
+                    </div>
+                    <div id="emergency_network" style="display: none;">
+                        <select id="emergency_intersection" style="width: 100%; padding: 8px; margin-bottom: 10px;">
+                            <option value="">Select Intersection</option>
+                        </select>
+                        <select id="emergency_lane_network" style="width: 100%; padding: 8px; margin-bottom: 10px;">
+                            <option value="">Select Direction</option>
+                            <option value="N">North Bound</option>
+                            <option value="E">East Bound</option>
+                            <option value="S">South Bound</option>
+                            <option value="W">West Bound</option>
+                        </select>
+                    </div>
+                    <button onclick="triggerEmergency()" class="btn btn-danger" style="width: 100%;">
+                        🚑 Trigger Emergency Response
+                    </button>
+                </div>
+                
+                <!-- Metrics Display -->
+                <div class="control-group">
+                    <h4>📊 Current Metrics</h4>
+                    <div id="metrics_display">
+                        <!-- Dynamic content -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
