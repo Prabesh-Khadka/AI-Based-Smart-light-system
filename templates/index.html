@@ -407,3 +407,343 @@
             </div>
         </div>
     </div>
+   
+    <script>
+        let map;
+        let markers = {};
+        let autoInterval = null;
+        let useAdaptive = true;
+        let currentView = 'single';
+        let networkState = null;
+        
+        // Initialize map
+        function initMap() {
+            map = L.map('map').setView([40.75, -74.00], 13);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; OpenStreetMap contributors',
+                subdomains: 'abcd'
+            }).addTo(map);
+        }
+        
+        // Switch between views
+        async function switchMode(mode) {
+            currentView = mode;
+            
+            // Update UI
+            document.getElementById('singleView').classList.toggle('active', mode === 'single');
+            document.getElementById('networkView').classList.toggle('active', mode === 'network');
+            
+            document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            // Show/hide emergency controls
+            document.getElementById('emergency_single').style.display = mode === 'single' ? 'block' : 'none';
+            document.getElementById('emergency_network').style.display = mode === 'network' ? 'block' : 'none';
+            
+            // Update backend mode
+            await fetch('/set_mode', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({mode: mode})
+            });
+            
+            // Reset and refresh
+            await reset();
+            showNotification(`Switched to ${mode === 'single' ? 'Single Intersection' : 'Network Map'} view`, 'info');
+        }
+        
+        // Step simulation
+        async function step() {
+            const densities = {
+                N: parseInt(document.getElementById('n_density').value),
+                E: parseInt(document.getElementById('e_density').value),
+                S: parseInt(document.getElementById('s_density').value),
+                W: parseInt(document.getElementById('w_density').value)
+            };
+            
+            let emergencyIntersection = null;
+            let emergencyLane = null;
+            
+            if (currentView === 'network') {
+                emergencyIntersection = document.getElementById('emergency_intersection').value;
+                emergencyLane = document.getElementById('emergency_lane_network').value;
+            } else {
+                emergencyLane = document.getElementById('emergency_lane_single').value;
+            }
+            
+            try {
+                const response = await fetch('/step', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        densities: densities,
+                        emergency_intersection: emergencyIntersection ? parseInt(emergencyIntersection) : null,
+                        emergency_lane: emergencyLane || null,
+                        use_adaptive: useAdaptive
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (currentView === 'single') {
+                    updateSingleView(data.intersection || data);
+                } else {
+                    updateNetworkView(data);
+                }
+                
+                updateMetrics(data);
+            } catch (error) {
+                console.error('Error:', error);
+                showNotification('Error updating simulation', 'error');
+            }
+        }
+        
+        // Update single intersection view
+        function updateSingleView(state) {
+            const lanes = ['N', 'E', 'S', 'W'];
+            lanes.forEach(lane => {
+                const vehicleSpan = document.getElementById(`single_${lane.toLowerCase()}_vehicles`);
+                if (vehicleSpan) vehicleSpan.innerText = state.vehicles[lane];
+                
+                const lightDiv = document.getElementById(`single_${lane.toLowerCase()}_light`);
+                if (lightDiv) {
+                    lightDiv.className = state.current_green === lane ? 'light green' : 'light red';
+                }
+            });
+        }
+        
+        // Update network map view
+        function updateNetworkView(state) {
+            networkState = state;
+            
+            // Update metrics
+            document.getElementById('net_total_vehicles').innerText = state.total_vehicles;
+            document.getElementById('net_total_passed').innerText = state.total_vehicles_passed;
+            document.getElementById('net_avg_congestion').innerText = `${state.average_congestion?.toFixed(1) || 0}%`;
+            
+            // Update intersection markers
+            if (state.intersections) {
+                updateMapMarkers(state.intersections);
+                
+                // Populate intersection dropdown if empty
+                const select = document.getElementById('emergency_intersection');
+                if (select && select.options.length <= 1) {
+                    state.intersections.forEach(int => {
+                        const option = document.createElement('option');
+                        option.value = int.id;
+                        option.textContent = int.name;
+                        select.appendChild(option);
+                    });
+                }
+            }
+        }
+        
+        // Update map markers
+        function updateMapMarkers(intersections) {
+            intersections.forEach(intersection => {
+                const congestion = intersection.congestion_level;
+                let color = '#48bb78';
+                if (congestion > 70) color = '#f56565';
+                else if (congestion > 40) color = '#ed8936';
+                else if (congestion > 20) color = '#4299e1';
+                
+                const icon = L.divIcon({
+                    html: `<div style="background-color: ${color}; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 3px solid white;">
+                            <span style="color: white; font-weight: bold;">${intersection.total_vehicles}</span>
+                           </div>`,
+                    iconSize: [40, 40],
+                    popupAnchor: [0, -20]
+                });
+                
+                const popupContent = `
+                    <div>
+                        <h4>${intersection.name}</h4>
+                        <p>🚗 Vehicles: ${intersection.total_vehicles}</p>
+                        <p>⚠️ Congestion: ${congestion.toFixed(1)}%</p>
+                        <p>🟢 Green: ${intersection.current_green}</p>
+                        <div class="congestion-bar"><div class="congestion-fill" style="width: ${congestion}%"></div></div>
+                    </div>
+                `;
+                
+                if (markers[intersection.id]) {
+                    markers[intersection.id].setLatLng([intersection.lat, intersection.lng]);
+                    markers[intersection.id].setIcon(icon);
+                    markers[intersection.id].setPopupContent(popupContent);
+                } else {
+                    markers[intersection.id] = L.marker([intersection.lat, intersection.lng], {icon: icon})
+                        .addTo(map)
+                        .bindPopup(popupContent);
+                }
+            });
+        }
+        
+        // Update metrics display
+        function updateMetrics(state) {
+            const metricsDiv = document.getElementById('metrics_display');
+            if (currentView === 'single') {
+                const intersection = state.intersection || state;
+                metricsDiv.innerHTML = `
+                    <div class="metrics-grid">
+                        <div class="metric-card"><h5>Total Vehicles</h5><div class="value">${intersection.total_vehicles}</div></div>
+                        <div class="metric-card"><h5>Vehicles Passed</h5><div class="value">${intersection.total_vehicles_passed}</div></div>
+                        <div class="metric-card"><h5>Avg Wait</h5><div class="value">${intersection.average_wait?.toFixed(1) || 0}s</div></div>
+                        <div class="metric-card"><h5>Congestion</h5><div class="value">${intersection.congestion_level?.toFixed(1) || 0}%</div></div>
+                        <div class="metric-card"><h5>Current Green</h5><div class="value">${intersection.current_green}</div></div>
+                        <div class="metric-card"><h5>Time Left</h5><div class="value">${intersection.time_remaining}s</div></div>
+                    </div>
+                `;
+            } else {
+                metricsDiv.innerHTML = `
+                    <div class="metrics-grid">
+                        <div class="metric-card"><h5>Network Total</h5><div class="value">${state.total_vehicles || 0}</div></div>
+                        <div class="metric-card"><h5>Total Passed</h5><div class="value">${state.total_vehicles_passed || 0}</div></div>
+                        <div class="metric-card"><h5>Avg Congestion</h5><div class="value">${state.average_congestion?.toFixed(1) || 0}%</div></div>
+                        <div class="metric-card"><h5>Timestamp</h5><div class="value">${state.timestamp || 0}s</div></div>
+                    </div>
+                `;
+            }
+        }
+        
+        // Reset simulation
+        async function reset() {
+            if (autoInterval) clearInterval(autoInterval);
+            try {
+                const response = await fetch('/reset', {method: 'POST'});
+                const data = await response.json();
+                if (currentView === 'single') {
+                    updateSingleView(data.intersection || data);
+                } else {
+                    updateNetworkView(data);
+                }
+                updateMetrics(data);
+                showNotification('Simulation reset', 'success');
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+        
+        // Auto-run controls
+        function startAuto() {
+            if (autoInterval) clearInterval(autoInterval);
+            autoInterval = setInterval(step, 1000);
+            showNotification('Auto-run started', 'success');
+        }
+        
+        function stopAuto() {
+            if (autoInterval) {
+                clearInterval(autoInterval);
+                autoInterval = null;
+                showNotification('Auto-run stopped', 'info');
+            }
+        }
+        
+        // Emergency trigger
+        async function triggerEmergency() {
+            if (currentView === 'single') {
+                const lane = document.getElementById('emergency_lane_single').value;
+                if (!lane) {
+                    showNotification('Please select a direction', 'error');
+                    return;
+                }
+                showNotification(`🚨 EMERGENCY: Clearing ${lane} bound lane! 🚨`, 'warning');
+            } else {
+                const intersection = document.getElementById('emergency_intersection').value;
+                const lane = document.getElementById('emergency_lane_network').value;
+                if (!intersection || !lane) {
+                    showNotification('Please select both intersection and direction', 'error');
+                    return;
+                }
+                showNotification(`🚨 EMERGENCY: Clearing ${lane} bound at intersection ${intersection}! 🚨`, 'warning');
+            }
+            await step();
+            setTimeout(() => {
+                if (currentView === 'single') {
+                    document.getElementById('emergency_lane_single').value = '';
+                } else {
+                    document.getElementById('emergency_lane_network').value = '';
+                }
+            }, 3000);
+        }
+        
+        // Export data
+        async function exportData() {
+            try {
+                const response = await fetch('/export_data', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({mode: currentView})
+                });
+                const data = await response.json();
+                
+                const blob = new Blob([data.csv], {type: 'text/csv'});
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `traffic_data_${currentView}_${new Date().toISOString()}.csv`;
+                link.click();
+                
+                showNotification('Data exported successfully!', 'success');
+            } catch (error) {
+                console.error('Error:', error);
+                showNotification('Error exporting data', 'error');
+            }
+        }
+        
+        // Run comparison test
+        async function runComparison() {
+            const densities = {N: 5, E: 5, S: 5, W: 5};
+            showNotification('Running comparison test for 300 seconds...', 'info');
+            
+            try {
+                const response = await fetch('/run_test', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({duration: 300, densities: densities})
+                });
+                const results = await response.json();
+                
+                const improvement = ((results.adaptive.total_vehicles_passed - results.fixed.total_vehicles_passed) / results.fixed.total_vehicles_passed * 100).toFixed(1);
+                
+                alert(`📊 COMPARISON RESULTS\n\nAdaptive Mode: ${results.adaptive.total_vehicles_passed} vehicles passed\nFixed Mode: ${results.fixed.total_vehicles_passed} vehicles passed\n\n✅ Improvement: +${improvement}% more vehicles processed!`);
+            } catch (error) {
+                console.error('Error:', error);
+                showNotification('Error running comparison', 'error');
+            }
+        }
+        
+        function showNotification(message, type) {
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            setTimeout(() => notification.remove(), 3000);
+        }
+        
+        // Initialize
+        ['n', 'e', 's', 'w'].forEach(lane => {
+            const slider = document.getElementById(`${lane}_density`);
+            const span = document.getElementById(`${lane}_val`);
+            slider.addEventListener('input', () => span.textContent = slider.value);
+        });
+        
+        document.getElementById('mode').addEventListener('change', (e) => {
+            useAdaptive = e.target.value === 'adaptive';
+            showNotification(`Switched to ${useAdaptive ? 'Adaptive (AI)' : 'Fixed Time'} mode`, 'info');
+        });
+        
+        initMap();
+        reset();
+        
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                e.preventDefault();
+                if (autoInterval) stopAuto();
+                else startAuto();
+            } else if (e.code === 'KeyS') step();
+            else if (e.code === 'KeyR') reset();
+        });
+        
+        showNotification('System ready! Click Step to start simulation. Press SPACE for auto-run.', 'success');
+    </script>
+</body>
+</html>
